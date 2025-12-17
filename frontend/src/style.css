@@ -1,0 +1,114 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Arial;
+  background: linear-gradient(135deg, #bde3ff 0%, #d4edff 45%, #e8f7ff 75%, #f6fbff 100%);
+  color: #0f3760;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.page header {
+  padding: 20px;
+  border-bottom: 1px solid rgba(15, 55, 96, 0.08);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.7));
+  backdrop-filter: blur(14px);
+}
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+
+.metrics {
+  display: flex;
+  gap: 16px;
+  font-size: 14px;
+  color: #0d6da6;
+  margin: 12px 0 18px;
+}
+
+.state {
+  color: #0284c7;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+button {
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(2, 132, 199, 0.4);
+  background: linear-gradient(135deg, #0ea5e9, #3cc7fb);
+  color: #f0faff;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+button:last-child {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(231, 245, 255, 0.9));
+  color: #0369a1;
+  border-color: rgba(2, 132, 199, 0.2);
+}
+
+button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(14, 165, 233, 0.25);
+}
+
+button:last-child:hover {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(226, 242, 255, 0.95));
+}
+
+.card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(236, 248, 255, 0.9));
+  border: 1px solid rgba(2, 132, 199, 0.12);
+  border-radius: 18px;
+  padding: 22px;
+  box-shadow: 0 20px 45px rgba(9, 62, 99, 0.12);
+}
+
+.messages.hidden {
+  display: none;
+}
+
+
+.msg {
+  border-bottom: 1px dashed rgba(2, 132, 199, 0.15);
+  padding: 14px 0;
+}
+.role {
+  font-size: 12px;
+  margin-right: 8px;
+  text-transform: uppercase;
+  color: #0e7490;
+}
+
+.role.assistant {
+  color: #0ea5e9;
+}
+
+.role.user {
+  color: #0284c7;
+}
+
+.placeholder {
+  color: #38bdf8;
+}
+
+@media (max-width: 640px) {
+  .metrics {
+    flex-direction: column;
+  }
+}
