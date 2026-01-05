@@ -7,6 +7,7 @@ from logger import logger
 
 from .event_bus import EventBus
 from .asr_manager import ASRManager
+from .tts_manager import TTSManager
 from .input_gateway import InputGateway
 from .pipeline import SimplePipeline
 from .output_gateway import OutputGateway
@@ -24,9 +25,8 @@ class Service:
         """
         self.pipeline = pipeline
         self.event_bus = EventBus(max_history=100)
-    
         self.asr_manager = ASRManager(self.event_bus, pipeline)
-
+        self.tts_manager = TTSManager(self.event_bus, pipeline)
         self.input_gateway = InputGateway(self.event_bus, websocket)
         self.output_gateway = OutputGateway(self.event_bus, websocket)
 

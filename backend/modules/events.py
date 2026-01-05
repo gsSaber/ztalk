@@ -211,7 +211,7 @@ class EventFactory:
             )
 
     @staticmethod
-    def create_tts_started(session_id: str, text: str, task_id: int) -> TTSStarted:
+    def create_tts_started(text: str, task_id: int) -> TTSStarted:
         return TTSStarted(
             event_id=str(uuid.uuid4()),
             timestamp=time.time(),
@@ -220,7 +220,7 @@ class EventFactory:
         )
 
     @staticmethod
-    def create_tts_stopped(session_id: str, text: str, task_id: int) -> TTSStopped:
+    def create_tts_stopped(text: str, task_id: int) -> TTSStopped:
         return TTSStopped(
             event_id=str(uuid.uuid4()),
             timestamp=time.time(),
@@ -229,7 +229,7 @@ class EventFactory:
         )
 
     @staticmethod
-    def create_tts_paused(session_id: str, text: str, task_id: int) -> TTSPaused:
+    def create_tts_paused(text: str, task_id: int) -> TTSPaused:
         return TTSPaused(
             event_id=str(uuid.uuid4()),
             timestamp=time.time(),
@@ -239,7 +239,7 @@ class EventFactory:
 
     @staticmethod
     def create_tts_response_update(
-        session_id: str, task_id: int, text: str
+        task_id: int, text: str
     ) -> TTSResponseUpdate:
         return TTSResponseUpdate(
             event_id=str(uuid.uuid4()),
@@ -250,7 +250,7 @@ class EventFactory:
 
     @staticmethod
     def create_tts_response_finish(
-        session_id: str, text: str, task_id: int
+        text: str, task_id: int
     ) -> TTSResponseFinish:
         return TTSResponseFinish(
             event_id=str(uuid.uuid4()),
@@ -261,7 +261,7 @@ class EventFactory:
 
     @staticmethod
     def create_tts_chunk_generated(
-        session_id: str, audio_chunk: bytes, task_id: int, text: str = ""
+        audio_chunk: bytes, task_id: int, text: str = ""
     ) -> TTSChunkGenerated:
         return TTSChunkGenerated(
             event_id=str(uuid.uuid4()),
@@ -273,7 +273,7 @@ class EventFactory:
 
     @staticmethod
     def create_tts_playback_finished(
-        session_id: str, final_text: str
+        final_text: str
     ) -> TTSPlaybackFinished:
         return TTSPlaybackFinished(
             event_id=str(uuid.uuid4()),

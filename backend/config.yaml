@@ -1,4 +1,7 @@
 backend:
   host: 127.0.0.1
   port: 5172
-
+llm:
+  model: "qwen3-max-preview"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  api_key: ""

@@ -31,63 +31,218 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 
+const playingSources = [];
+const audioQueue = [];
+let ttsStreamActive = false;
+let ttsStreamFinished = false;
 let lastClientVadStartTs = ref(null);
 let waitingFirstUpdateResp = ref(false);
 let finishASRTs = ref(null);
-// let onChangeCallback = ref(null)
+let audioCtx = null;
 let ws = null;
 let vad= null;
-// const streamState = ref<'idle' | 'listening' | 'processing' | 'speaking'>('idle')
 const showHistory = ref(true)
+let TTS_SAMPLE_RATE = 48000;
+let LOCAL_SAMPLE_RATE = 44100;
+// Poll timer for "wait for next chunk" when active
+let playPollTimer = null;
+let newAudioOutputCallback = (float32, sampleRate) => {
+            try {
+                ensureAudioContext();
+                if (!audioCtx) return;
 
-async function toggle() {
-  if (state.streaming) {
-      await stopStreaming();
-      state.streamState = 'idle';
-  } else {
-      state.loading = true;
-      await startStreaming();
-      state.loading = false;
-      state.streamState = 'listening';
-  }
-}
-// Start capture with VAD auto mode
-async function startStreaming() {
-    if (state.streaming) return;
+                // Ensure analyser exists and arrays are sized
+                if (!outAnalyser) {
+                    outAnalyser = audioCtx.createAnalyser();
+                    outAnalyser.fftSize = 1024;
+                    outAnalyser.smoothingTimeConstant = 0.7;
+                    outBufferLength = outAnalyser.fftSize;
+                    outDataArray = new Uint8Array(outBufferLength);
+                }
+                // Ensure silent pull chain (no audible playback)
+                if (!outAnalyserConnected) {
+                    if (!silentGain) {
+                        silentGain = audioCtx.createGain();
+                        silentGain.gain.value = 0;
+                        silentGain.connect(audioCtx.destination);
+                    }
+                    outAnalyser.connect(silentGain);
+                    outAnalyserConnected = true;
+                }
 
-    await initVAD();
+                // Create and feed a BufferSource from raw PCM (silent due to zero-gain chain)
+                const buffer = audioCtx.createBuffer(1, float32.length, sampleRate);
+                buffer.getChannelData(0).set(float32);
+                const src = audioCtx.createBufferSource();
+                src.buffer = buffer;
 
-    if (vad) {
-        await vad.start();
-        state.streaming = true;
+                // Connect: src -> analyser -> silentGain(0) -> destination
+                src.connect(outAnalyser);
+                src.start();
+                src.addEventListener('ended', () => {
+                    try { src.disconnect(); } catch { }
+                });
+            } catch (e) {
+                console.log(e);
+            }
+        };
 
-    } else {
-        throw new Error('VAD not initialized');
+
+function stopAllPlayback() {
+    markTTSStreamState('reset');
+    
+    if (playPollTimer) {
+        clearTimeout(playPollTimer);
+        playPollTimer = null;
+    }
+
+    playingSources.forEach((src) => { try { src.stop(); } catch (_e) { } });
+    playingSources.length = 0;
+    audioQueue.length = 0;
+
+    if (audioCtx) {
+        if (audioCtx.state !== 'suspended') {
+            audioCtx.close();
+        }
+        audioCtx = null;
     }
 }
 
-async function stopStreaming() {
-    if (!state.streaming) return;
-    state.streaming = false;
-    if (vad) {
+function markTTSStreamState(state) {
+    switch (state) {
+        case 'active':
+            ttsStreamActive = true;
+            ttsStreamFinished = false;
+            break;
+        case 'finished':
+            ttsStreamActive = false;
+            ttsStreamFinished = true;
+            break;
+        case 'reset':
+        case 'idle':
+            ttsStreamActive = false;
+            ttsStreamFinished = false;
+            break;
+        default:
+            break;
+    }
+}
+
+function ensureAudioCtx() {
+    if (!audioCtx) {
         try {
-            if (typeof vad.stop === 'function') {
-                await vad.stop();
-            } else {
-                if (typeof vad.destroy === 'function') vad.destroy();
-                if (vad._micStream && vad._micStream.getTracks) {
-                    vad._micStream.getTracks().forEach(track => track.stop());
-                }
-            }
+            audioCtx = new AudioContext({ sampleRate: LOCAL_SAMPLE_RATE });
         } catch (_e) {
-        } finally {
-            vad = null;
+            audioCtx = new AudioContext();
         }
     }
 }
 
-function toggleHistory() {
-  showHistory.value = !showHistory.value
+// Use a stateless linear resampler per chunk
+function resampleChunkPCM(src, fromRate, toRate) {
+    if (!src || src.length === 0) return src || new Float32Array(0);
+    if (fromRate === toRate) return src;
+    const outLen = Math.max(1, Math.round(src.length * toRate / fromRate));
+    const out = new Float32Array(outLen);
+    const ratio = fromRate / toRate; // input samples per output sample
+    for (let j = 0; j < outLen; j++) {
+        const pos = j * ratio;
+        const i = Math.floor(pos);
+        const frac = pos - i;
+        const s0 = src[i] ?? 0;
+        const i1 = i + 1 < src.length ? i + 1 : i;
+        const s1 = src[i1] ?? s0;
+        out[j] = s0 + (s1 - s0) * frac;
+    }
+    return out;
+}
+
+// Serial playback
+function playNextAudio() {
+    // Do not start when AudioContext is paused
+    if (audioCtx && audioCtx.state === 'suspended') return;
+
+    if (audioQueue.length === 0) {
+        return;
+    }
+
+    if (playingSources.length > 0) {
+        return; // Wait current source end
+    }
+
+    const float32 = audioQueue.shift();
+    newAudioOutputCallback && newAudioOutputCallback(float32, audioCtx ? audioCtx.sampleRate : LOCAL_SAMPLE_RATE);
+    // Use local AudioContext sample rate for playback
+    const buffer = audioCtx.createBuffer(1, float32.length, audioCtx.sampleRate);
+    buffer.getChannelData(0).set(float32);
+    const src = audioCtx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(audioCtx.destination);
+
+    src.onended = () => {
+        const idx = playingSources.indexOf(src);
+        if (idx !== -1) playingSources.splice(idx, 1);
+
+        if (playingSources.length === 0) playNextAudio();
+
+        if (playingSources.length === 0 && audioQueue.length === 0) {
+            if (ttsStreamFinished) {
+                sendJson({ action: "tts_playback_finished", timestamp: Date.now() });
+                // Reset after playback drain
+                markTTSStreamState('reset');
+                onIncomingJson({ action: 'client_tts_playback_finished', data: { timestamp: Date.now() } });
+            }
+        }
+    };
+
+    src.onerror = () => {
+        const idx = playingSources.indexOf(src);
+        if (idx !== -1) playingSources.splice(idx, 1);
+        if (playingSources.length === 0) playNextAudio();
+    };
+
+    playingSources.push(src);
+    src.start();
+}
+
+function enableAllPlayback() {
+        // Guard when stream marked finished/reset
+        if (ttsStreamFinished) return;
+
+        ensureAudioCtx();
+
+        // 如果 audioCtx 被暂停，需要恢复它才能播放
+        if (audioCtx && audioCtx.state === 'suspended') {
+            audioCtx.resume().then(() => {
+                playNextAudio();
+            }).catch(() => { });
+        } else {
+            playNextAudio();
+        }
+}
+
+// function resumeTTSPlayback() {
+//     ensureAudioCtx();
+//     if (audioCtx.state === 'suspended') {
+//         audioCtx.resume().then(() => {
+//             if (playingSources.length === 0 && audioQueue.length > 0) {
+//                 playNextAudio();
+//             }
+//         }).catch(() => { });
+//     } else if (playingSources.length === 0 && audioQueue.length > 0) {
+//         playNextAudio();
+//     }
+// }
+function pauseTTSPlayback() {
+    if (audioCtx && audioCtx.state === 'running') {
+        audioCtx.suspend().catch(() => {
+            playingSources.forEach((src) => { try { src.stop(); } catch (_e2) { } });
+            playingSources.length = 0;
+        });
+    } else {
+        playingSources.forEach((src) => { try { src.stop(); } catch (_e) { } });
+        playingSources.length = 0;
+    }
 }
 
 function handleIncomingData(event) {
@@ -100,16 +255,84 @@ function handleIncomingData(event) {
                 onIncomingJson(json_data);
             }
         } catch (_e) { }
+        return;
+    }
+    if (event.data instanceof ArrayBuffer) {
+        if (ttsStreamFinished) return;
+
+        const int16 = new Int16Array(event.data);
+        if (int16.length === 0) return;
+
+        const float32 = new Float32Array(int16.length);
+        for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+
+        ensureAudioCtx();
+        const targetRate = audioCtx ? audioCtx.sampleRate : LOCAL_SAMPLE_RATE;
+        const resampled = resampleChunkPCM(float32, TTS_SAMPLE_RATE, targetRate);
+
+        audioQueue.push(resampled);
+        enableAllPlayback();
+        return;
     }
 }
 
-function initWebSocket(onmessage = handleIncomingData) {
-    const webSocketUrl = '/ws';
-    ws = new WebSocket(webSocketUrl);
-    ws.binaryType = 'arraybuffer';
-    ws.addEventListener('message', (event) => {
-        onmessage(event);
-    });
+// Start capture with VAD auto mode
+async function startStreaming() {
+    if (state.streaming) return;
+
+    await initVAD();
+
+    if (vad) {
+        await vad.start();
+        state.streaming = true;
+
+        sendJson({ action: "conversation_start", timestamp: Date.now() });
+    } else {
+        throw new Error('VAD not initialized');
+    }
+}
+
+async function stopStreaming() {
+    // Reset TTS flags and stop playback first
+        markTTSStreamState('reset');
+        stopAllPlayback();
+
+        if (!state.streaming) return;
+
+        state.streaming = false;
+
+        if (vad) {
+            try {
+                if (typeof vad.stop === 'function') {
+                    await vad.stop();
+                } else {
+                    if (typeof vad.destroy === 'function') vad.destroy();
+                    if (vad._micStream && vad._micStream.getTracks) {
+                        vad._micStream.getTracks().forEach(track => track.stop());
+                    }
+                }
+            } catch (_e) {
+            } finally {
+                vad = null;
+            }
+        }
+
+        sendJson({ action: "conversation_end", timestamp: Date.now() });
+}
+
+async function toggle() {
+  if (state.streaming) {
+      await stopStreaming();
+      state.streamState = 'idle';
+  } else {
+      state.loading = true;
+      await startStreaming();
+      state.loading = false;
+      state.streamState = 'listening';
+  }
+}
+function toggleHistory() {
+  showHistory.value = !showHistory.value
 }
 
 const state = reactive({
@@ -173,8 +396,8 @@ async function initVAD() {
         positiveSpeechThreshold: 0.3,
         negativeSpeechThreshold: 0.05,
         onSpeechStart: () => {
-            // Pause TTS immediately on speech
-            // pauseTTSPlayback();
+            // Stop TTS immediately on speech and clear audio queue
+            stopAllPlayback();
 
             isTransmittingAudio = true;
 
@@ -208,10 +431,14 @@ async function initVAD() {
     });
     vad = myvad;
 }
-
-//---------------上面是声明和定义，下面是执行--------------------------
-initWebSocket();
-state.loading = false;
+function initWebSocket(onmessage = handleIncomingData) {
+    const webSocketUrl = '/ws';
+    ws = new WebSocket(webSocketUrl);
+    ws.binaryType = 'arraybuffer';
+    ws.addEventListener('message', (event) => {
+        onmessage(event);
+    });
+}
 
 function updateLastMessage(newMsg) {
     const normalized = { role: newMsg.role, text: newMsg.content ?? '' };
@@ -229,7 +456,7 @@ function updateLastMessage(newMsg) {
     }
 }
 
-function onIncomingJson(json) {
+function  onIncomingJson(json) {
     switch (json.action) {
         case 'client_vad_speech_start': {
             const ts = (json.data && json.data.timestamp) || Date.now();
@@ -260,8 +487,39 @@ function onIncomingJson(json) {
             state.synthesisLatency = null;
             break;
         }
+        case 'start_tts':
+            markTTSStreamState('active');
+            state.streamState = 'speaking';
+            break;
+        case 'stop_tts':
+            stopAllPlayback();
+            break;
+        case 'finish_resp': {
+            updateLastMessage({ role:"Ai", content: json.data.text });
+            markTTSStreamState('finished');
+            break;
+        }
+        case 'update_resp': {
+            if (waitingFirstUpdateResp && finishASRTs) {
+                const now = Date.now();
+                state.synthesisLatency = Math.max(0, now - finishASRTs);
+                waitingFirstUpdateResp = false;
+            }
+            updateLastMessage({ role:"Ai", content: json.data.text });
+            break;
+        }
+        case 'client_tts_playback_finished':
+            state.streamState = 'idle';
+            break;
     }
 }
+//---------------上面是声明和定义，下面是执行--------------------------
+initWebSocket();
+state.loading = false;
+
+
+
+
 
 
 </script>
